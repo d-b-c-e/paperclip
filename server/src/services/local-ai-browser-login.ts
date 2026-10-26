@@ -67,7 +67,6 @@ export function startLocalBrowserLogin(provider: "anthropic" | "openai", home: s
       active.kill("SIGTERM");
       return Promise.resolve();
     }
-    // npm shims can own a CLI child; cancel only this login's process tree.
     stopping = new Promise((resolve, reject) => {
       execFile(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"),
         ["/PID", String(active.pid), "/T", "/F"], { windowsHide: true, timeout: 5000 }, error => {
@@ -119,7 +118,6 @@ export function startLocalBrowserLogin(provider: "anthropic" | "openai", home: s
         child = spawn(target.command, target.args, { env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
           windowsVerbatimArguments: target.windowsVerbatimArguments });
         child.stdout.on("data", (bytes: Buffer) => onData(bytes.toString("utf8")));
-        // The Windows CLI emits login output on both streams; parse only in memory.
         if (windowsCodex) child.stderr.on("data", (bytes: Buffer) => onData(bytes.toString("utf8")));
         else child.stderr.resume();
         child.once("error", () => {

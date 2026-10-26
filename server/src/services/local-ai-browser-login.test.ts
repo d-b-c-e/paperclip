@@ -96,7 +96,7 @@ describe.skipIf(process.platform !== "win32")("Windows Codex browser subscriptio
     } finally {
       login.abort();
       for (const pid of pids) {
-        try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); } catch { /* Already stopped. */ }
+        try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); } catch {}
       }
     }
   });
@@ -138,7 +138,7 @@ describe.skipIf(process.platform !== "win32")("Windows Codex browser subscriptio
       await vi.waitFor(() => expect(login.error).toBeUndefined());
     } finally {
       login.abort();
-      if (pid) try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); } catch { /* Already stopped. */ }
+      if (pid) try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); } catch {}
     }
   });
 });
