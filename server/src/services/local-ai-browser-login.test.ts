@@ -26,6 +26,89 @@ afterEach(async () => {
   root = undefined;
 });
 
+describe.skipIf(process.platform !== "win32")("Windows Codex browser subscription login", () => {
+  async function windowsCli(source: string) {
+    root = await mkdtemp(path.join(os.tmpdir(), "paperclip-browser-login-"));
+    const bin = path.join(root, "bin with spaces");
+    const home = path.join(root, "credential-home");
+    await mkdir(bin);
+    await mkdir(home);
+    const script = path.join(bin, "fixture.mjs");
+    await writeFile(script, source);
+    await writeFile(path.join(bin, "codex.cmd"), `@"${process.execPath}" "${script}" %*\r\n`);
+    process.env.PATH = `${bin}${path.delimiter}${initialPath}`;
+    return home;
+  }
+
+  const prompt = "1. Open this link in your browser and sign in to your account\nhttps://auth.openai.com/codex/device\n2. Enter this one-time code (expires in 15 minutes)\nABCD-EFGHJ\n";
+
+  it("runs a cmd shim with spaces and parses stderr without Python or the host credentials", async () => {
+    const home = await windowsCli(`
+      import assert from 'node:assert/strict';
+      assert.deepEqual(process.argv.slice(2), ['login', '--device-auth']);
+      assert.equal(process.env.CODEX_HOME, process.env.PAPERCLIP_TEST_LOGIN_CODEX_HOME);
+      assert.notEqual(process.env.CODEX_HOME, process.env.HOME);
+      assert.equal(process.cwd(), process.env.PAPERCLIP_TEST_LOGIN_CWD);
+      for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) assert.equal(process.env[key], '');
+      process.stderr.write(${JSON.stringify(prompt)});
+    `);
+    vi.stubEnv("PAPERCLIP_TEST_LOGIN_CODEX_HOME", home);
+    vi.stubEnv("PAPERCLIP_TEST_LOGIN_CWD", process.cwd());
+    vi.stubEnv("HOME", path.join(root!, "host-home"));
+    vi.stubEnv("CODEX_HOME", path.join(root!, "host-home"));
+    vi.stubEnv("ComSpec", path.join(process.env.SystemRoot!, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
+    for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]) vi.stubEnv(key, "host-credential-fixture");
+    const login = startLocalBrowserLogin("openai", home);
+    try {
+      await vi.waitFor(() => expect(login.outcome).toBe("success"), { timeout: 5000 });
+      expect(login.authorizationUrl).toBe("https://auth.openai.com/codex/device");
+      expect(login.code).toBe("ABCD-EFGHJ");
+      expect(resolveCodexCommand).not.toHaveBeenCalled();
+      expect(JSON.stringify(login)).not.toContain("host-credential-fixture");
+    } finally { login.abort(); }
+  });
+
+  it("cancels the shim and its descendant CLI processes", async () => {
+    const home = await windowsCli(`
+      import { spawn } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      import path from 'node:path';
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+      writeFileSync(path.join(process.env.CODEX_HOME, 'login-pids.json'), JSON.stringify([process.pid, child.pid]));
+      setInterval(() => {}, 1000);
+    `);
+    const login = startLocalBrowserLogin("openai", home);
+    let pids: number[] = [];
+    try {
+      await vi.waitFor(async () => {
+        pids = JSON.parse(await readFile(path.join(home, "login-pids.json"), "utf8"));
+        expect(pids).toHaveLength(2);
+      }, { timeout: 5000 });
+      login.abort();
+      await vi.waitFor(() => expect(login.outcome).toBe("failure"), { timeout: 5000 });
+      await vi.waitFor(() => {
+        for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
+      }, { timeout: 5000 });
+    } finally {
+      login.abort();
+      for (const pid of pids) {
+        try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); } catch { /* Already stopped. */ }
+      }
+    }
+  });
+
+  it("cancels before launch and never exposes provider error output", async () => {
+    const home = await windowsCli(`process.stderr.write('private-provider-error'); process.exitCode = 1;`);
+    const cancelled = startLocalBrowserLogin("openai", home);
+    cancelled.abort();
+    await vi.waitFor(() => expect(cancelled.outcome).toBe("failure"), { timeout: 5000 });
+    const failed = startLocalBrowserLogin("openai", home);
+    await vi.waitFor(() => expect(failed.outcome).toBe("failure"), { timeout: 5000 });
+    expect(failed.authorizationUrl).toBeUndefined();
+    expect(JSON.stringify(failed)).not.toContain("private-provider-error");
+  });
+});
+
 async function fakeCli(name: string, source: string) {
   root ??= await mkdtemp(path.join(os.tmpdir(), "paperclip-browser-login-"));
   const bin = path.join(root, "bin");
