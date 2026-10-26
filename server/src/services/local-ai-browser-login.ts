@@ -16,9 +16,6 @@ export type LocalBrowserLoginState = {
   abort: () => void;
 };
 
-// Node has no built-in PTY API. Python's standard-library pty module supplies
-// the terminal used on Unix hosts. The Docker image already includes
-// python3. This bridge forwards only bytes; provider output is never logged.
 const PYTHON_PTY_BRIDGE = String.raw`
 import errno, os, pty, select, signal, sys
 pid, master = pty.fork()
