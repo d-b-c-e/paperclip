@@ -14,7 +14,6 @@ it.skipIf(process.platform !== "win32")("preserves the Windows loader environmen
     if (!address || typeof address === "string") throw new Error("Missing test listener");
     const allowed = new Set(codexShellEnvironmentKeys({}, {}, false).map(key => key.toUpperCase()));
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => allowed.has(key.toUpperCase())));
-    // Node restores these automatically; Codex's shell filter does not.
     const clear = ["SystemRoot", "SystemDrive", "WINDIR"].filter(key => !allowed.has(key.toUpperCase()))
       .map(key => `Remove-Item Env:${key} -ErrorAction SilentlyContinue;`).join(" ");
     const child = spawn("pwsh.exe",
