@@ -49,11 +49,16 @@ sys.exit(os.waitstatus_to_exitcode(status))
 /** Run the same browser-code login used by sandbox connections on the local host. */
 export function startLocalBrowserLogin(provider: "anthropic" | "openai", home: string): LocalBrowserLoginState {
   const controller = new AbortController();
-  const state: LocalBrowserLoginState = { abort: () => controller.abort() };
+  const state: LocalBrowserLoginState = { abort: () => {
+    const retry = controller.signal.aborted;
+    controller.abort();
+    if (retry) void stopChild().catch(() => {});
+  } };
   const args = provider === "anthropic" ? ["setup-token"] : ["login", "--device-auth"];
   const windowsCodex = process.platform === "win32" && provider === "openai";
   let child: ChildProcessWithoutNullStreams | null = null;
   let stopping: Promise<void> | undefined;
+  const cleanupError = "Codex sign-in could not be stopped. Stop this login's Codex process or retry cancellation before starting sign-in again.";
   function stopChild(): Promise<void> {
     if (stopping) return stopping;
     const active = child;
@@ -63,9 +68,18 @@ export function startLocalBrowserLogin(provider: "anthropic" | "openai", home: s
       return Promise.resolve();
     }
     // npm shims can own a CLI child; cancel only this login's process tree.
-    stopping = new Promise(resolve => {
+    stopping = new Promise((resolve, reject) => {
       execFile(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"),
-        ["/PID", String(active.pid), "/T", "/F"], { windowsHide: true, timeout: 5000 }, () => resolve());
+        ["/PID", String(active.pid), "/T", "/F"], { windowsHide: true, timeout: 5000 }, error => {
+          if (error && active.exitCode === null && active.signalCode === null) {
+            stopping = undefined;
+            state.error = cleanupError;
+            reject(new Error("Local sign-in cleanup failed"));
+          } else {
+            if (state.error === cleanupError) delete state.error;
+            resolve();
+          }
+        });
     });
     return stopping;
   }

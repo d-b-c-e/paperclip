@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { startLocalBrowserLogin } from "./local-ai-browser-login.js";
 import { resolveCodexCommand } from "../vendor/paperclip-runner/index.js";
@@ -10,6 +10,10 @@ import { resolveCodexCommand } from "../vendor/paperclip-runner/index.js";
 vi.mock("../vendor/paperclip-runner/index.js", () => ({
   resolveCodexCommand: vi.fn(),
 }));
+vi.mock("node:child_process", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 
 const initialPath = process.env.PATH;
 const initialPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -106,6 +110,36 @@ describe.skipIf(process.platform !== "win32")("Windows Codex browser subscriptio
     await vi.waitFor(() => expect(failed.outcome).toBe("failure"), { timeout: 5000 });
     expect(failed.authorizationUrl).toBeUndefined();
     expect(JSON.stringify(failed)).not.toContain("private-provider-error");
+  });
+
+  it("reports a failed process-tree stop and permits cancellation to be retried", async () => {
+    const home = await windowsCli(`
+      import { writeFileSync } from 'node:fs';
+      import path from 'node:path';
+      writeFileSync(path.join(process.env.CODEX_HOME, 'login.pid'), String(process.pid));
+      setInterval(() => {}, 1000);
+    `);
+    const login = startLocalBrowserLogin("openai", home);
+    let pid = 0;
+    try {
+      await vi.waitFor(async () => { pid = Number(await readFile(path.join(home, "login.pid"), "utf8")); expect(pid).toBeGreaterThan(0); });
+      vi.mocked(execFile).mockImplementationOnce((...args: unknown[]) => {
+        const callback = args.at(-1) as (error: Error) => void;
+        queueMicrotask(() => callback(new Error("private-taskkill-details")));
+        return {} as ReturnType<typeof execFile>;
+      });
+      login.abort();
+      await vi.waitFor(() => expect(login.outcome).toBe("failure"));
+      expect(login.error).toContain("could not be stopped");
+      expect(JSON.stringify(login)).not.toContain("private-taskkill-details");
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      login.abort();
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5000 });
+      await vi.waitFor(() => expect(login.error).toBeUndefined());
+    } finally {
+      login.abort();
+      if (pid) try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); } catch { /* Already stopped. */ }
+    }
   });
 });
 
